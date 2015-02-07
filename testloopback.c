@@ -7,15 +7,20 @@
 #include <stdbool.h>
 #include "ftd2xx.h"
 
+#define BUFFER_SIZE 1024
+
 int main(int argc, char* argv[])
 {
+
+	printf("Start");
+
 	FT_HANDLE ftHandle;            // Handle of the FTDI device
 	FT_STATUS ftStatus;            // Result of each D2XX call
 	DWORD dwNumDevs;               // The number of devices
 	unsigned int uiDevIndex = 0xF; // The device in the list that we'll use
-	BYTE byOutputBuffer[16];        // Buffer to hold MPSSE commands and data
+	BYTE byOutputBuffer[BUFFER_SIZE];        // Buffer to hold MPSSE commands and data
 	// to be sent to the FT2232H
-	BYTE byInputBuffer[16];         // Buffer to hold data read from the FT2232H
+	BYTE byInputBuffer[BUFFER_SIZE];         // Buffer to hold data read from the FT2232H
 	DWORD dwCount = 0;             // General loop index
 	DWORD dwNumBytesToSend = 0;    // Index to the output buffer
 	DWORD dwNumBytesSent = 0;      // Count of the actual bytes send - used with the FT_Write
@@ -24,13 +29,14 @@ int main(int argc, char* argv[])
 	DWORD dwClockDivisor = 0x05DB; // Value of clock divisor, SCL Frequency =
 	//     60/((1+0x05DB*2) (MHz) = 1Mhz
 	int i;
-	unsigned int c;
-	int count=5, milisecs = 1000;//by default led will blink 5 times waiting 1 seconds between on/off
+	char c;
+	int count;
 
-	if(argc == 3){ //get command line parameters to blink leds and time interval between on/off
+	if(argc == 2){ //get command line parameters to send and recieve back from loopback
 		count = atoi(argv[1]);
-		milisecs = atoi(argv[2]);
+		if(count>BUFFER_SIZE) count = BUFFER_SIZE;
 	}
+
 	// Does an FTDI device exist?
 
 	printf("Checking for FTDI devices...\n");
@@ -161,10 +167,10 @@ int main(int argc, char* argv[])
 	ftStatus = FT_Read(ftHandle, &byInputBuffer, dwNumBytesToRead, &dwNumBytesRead);
 	// Read out the data from the input buffer
 
-	printf("%d byte(s) read from buffer:", dwNumBytesRead);
+	printf("%d byte(s) read from buffer\n", dwNumBytesRead);
 
 	for (i=0; i<dwNumBytesRead;i++)
-		printf("[%x]",byInputBuffer[i]); //Print read buffer bytes from ftdi
+		printf("\t%x",byInputBuffer[i]); //Print read buffer bytes from ftdi
 	printf("\n");
 
 	for (dwCount = 0; dwCount < dwNumBytesRead - 1; dwCount++)
@@ -272,32 +278,152 @@ int main(int argc, char* argv[])
 	// ACBUS6 GPIOH6 input 0 0
 	// ACBUS7 GPIOH7 input 0 0
 
-	printf("Led will blink %d times with %d milisecs on/off time.\n", count, milisecs);
-
 	c  = 1;
+	byOutputBuffer[dwNumBytesToSend++] = 0x82;
+	// configure data bits low-byte of MPSSE port
 
-	do{
-		byOutputBuffer[dwNumBytesToSend++] = 0x82;
-		// configure data bits low-byte of MPSSE port
+	byOutputBuffer[dwNumBytesToSend++] = 0x01&c++;
+	// initial state config above
 
-		byOutputBuffer[dwNumBytesToSend++] = 0x01&c++;
-		// initial state config above
+	byOutputBuffer[dwNumBytesToSend++] = 0x01;
+	// direction config above;
 
-		byOutputBuffer[dwNumBytesToSend++] = 0x01;
-		// direction config above;
+	ftStatus = FT_Write(ftHandle, byOutputBuffer, dwNumBytesToSend, &dwNumBytesSent);
+	// send off the high GPIO config commands
 
-		ftStatus = FT_Write(ftHandle, byOutputBuffer, dwNumBytesToSend, &dwNumBytesSent);
-		// send off the high GPIO config commands
-		dwNumBytesToSend = 0;
-		usleep(milisecs*1000);
-	}while(c<count*2);
+	dwNumBytesToSend = 0;
 
-	printf("Led blinked %d times!\n",c/2);
+	for(dwCount = 0; dwCount < 8; dwCount++)
+	{
+		byInputBuffer[dwCount] = 0x00;
+		byOutputBuffer[dwCount] = 0x00;
+	}
 
-	FT_SetBitMode(ftHandle, 0x0, 0x00);
-	// reset the port to disable MPSSE
-	FT_Close(ftHandle);
-	// close the USB port
+
+	// Data Transmit, no receive
+
+	byOutputBuffer[dwNumBytesToSend++] = 0x10;
+	// output on rising clock, no input
+	// MSB first, clock a number of bytes out
+
+	byOutputBuffer[dwNumBytesToSend++] = 0x01; // Length L
+	byOutputBuffer[dwNumBytesToSend++] = 0x00; // Length H
+	// Length = 0x0001 + 1
+	byOutputBuffer[dwNumBytesToSend++] = 0xA5;
+	byOutputBuffer[dwNumBytesToSend++] = 0x0F;
+	// Data = 0xA50F
+
+	ftStatus = FT_Write(ftHandle, byOutputBuffer, dwNumBytesToSend, &dwNumBytesSent);
+	// send off the command
+	dwNumBytesToSend = 0; // reset the buffer pointer
+	sleep(1); // Wait for the data to be transmitted and status to be returned by the
+	// device driver - see latency timer above
+
+	// check the receive buffer - it should be empty
+	ftStatus = FT_GetQueueStatus(ftHandle, &dwNumBytesToRead);
+	printf("%d bytes waiting in the buffer to be read\n", dwNumBytesToRead);
+
+	if(ftStatus != FT_OK){
+		printf("error received. stop!\n");
+		FT_SetBitMode(ftHandle, 0x0, 0x00); // reset the port to disable MPSSE
+		FT_Close(ftHandle); // close the USB port
+		return 1; // Exit with error
+	}
+	// get the number of bytes in the FT2232H receive buffer
+	// it should be zero since there was no data clock *in*
+
+	FT_Read(ftHandle, &byInputBuffer, dwNumBytesToRead, &dwNumBytesRead);
+
+	if (dwNumBytesToRead != 0)
+	{
+		printf("Error 2- MPSSE receive buffer should be empty, %d bytes read\n", ftStatus, dwNumBytesRead);
+		FT_SetBitMode(ftHandle, 0x0, 0x00); // reset the port to disable MPSSE
+		FT_Close(ftHandle); // close the USB port
+		return 1; // Exit with error
+	}
+
+	printf("Press <Enter> to continue\n");
+	getchar(); // wait for a carriage return
+
+	// Now repeat the transmission with the send and receive op-code in place
+	// of transmit-only Data Transmit, with receive
+
+	byOutputBuffer[dwNumBytesToSend++] = 0x34;
+	// output on rising clock, input on falling clock
+	// MSB first, clock a number of bytes out
+
+	byOutputBuffer[dwNumBytesToSend++] = (BYTE)(0xFF & (count-1)); // Length L
+	byOutputBuffer[dwNumBytesToSend++] = (BYTE)(count>>8); // Length H
+	// Length = 0x0001 + 1
+
+	c = 0;
+	for(i=0; i<count; i++)
+		byOutputBuffer[dwNumBytesToSend++] = c++;
+
+	ftStatus = FT_Write(ftHandle, byOutputBuffer, dwNumBytesToSend, &dwNumBytesSent);
+	// send off the command
+
+	dwNumBytesToSend = 0;
+	// reset output buffer pointer
+
+	sleep(2);
+	// wait for data to be transmitted and status to be returned by the device driver
+	// see latency timer above
+
+	// Check the receive buffer - it should contain the looped-back data
+	ftStatus = FT_GetQueueStatus(ftHandle, &dwNumBytesToRead);
+	// get the number of bytes in the FT2232H receive buffer
+	// it should be zero since there was no data clock *in*
+
+	FT_Read(ftHandle, &byInputBuffer, dwNumBytesToRead, &dwNumBytesRead);
+
+	// the input buffer should contain the same number of bytes as those output
+
+	if (dwNumBytesToRead != count)
+	{
+		printf("Error - MPSSE receive buffer should have the looped-back data\n");
+		printf("%d bytes read\n", count);
+
+		FT_SetBitMode(ftHandle, 0x0, 0x00);
+		// reset the port to disable MPSSE
+		FT_Close(ftHandle);
+		// close the USB port
+		return 1;
+	}
+	printf("The correct number of bytes have been recieved\n");
+
+	// check to be sure its the same
+
+	printf("Sent:Received\n");
+	for (dwCount = 0; dwCount <= dwNumBytesRead - 1; dwCount++)
+	{
+		printf("[%02x]:[%02x]\n", byInputBuffer[dwCount], byOutputBuffer[dwCount + 3]);
+
+
+		if (byInputBuffer[dwCount] != byOutputBuffer[dwCount + 3])
+			// output data begins at location 3 after the opcode and length
+		{
+			printf("Error - Data received does not match data output input %02x output %02x\n", byInputBuffer[dwCount], byOutputBuffer[dwCount + 3]);
+			FT_SetBitMode(ftHandle, 0x0, 0x00);
+			// reset the port to disable MPSSE
+			FT_Close(ftHandle);
+			// close the USB port
+			return 1; // exit with error
+		}
+	}
+
+	printf("The input data matches the output data\n");
+	printf("Press <Enter> to continue\n");
+	getchar();
+
+	// clear the buffers
+	for (dwCount = 0; dwCount < 8; dwCount++)
+	{
+		byInputBuffer[dwCount] = 0x00;
+		byInputBuffer[dwCount] = 0x00;
+	}
+
+	printf("End");
 
 	return 0;
 }
