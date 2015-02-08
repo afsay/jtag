@@ -1,15 +1,12 @@
-CC=gcc
+include standard_rules.mk
 
-CFLAGS=-L. -L/usr/local/lib -lftd2xx
-
-
-all: blink
-
-blink: blink.c	
-	$(CC) blink.c -o blink $(CFLAGS)
+all:
+	make -C src
+#blink: blink.o	
+#	$(CC) blink.c -o blink $(CFLAGS)
 	
-testloopback: testloopback.c
-	$(CC) testloopback.c -o testloopback $(CFLAGS)
+#testloopback: testloopback.o
+#	$(CC) testloopback.c -o testloopback $(CFLAGS)
 
 clean:
-	rm -f *.o ; rm blink
+	rm -f bin/* #Remove all files but Makefile
