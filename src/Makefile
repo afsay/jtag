@@ -1,6 +1,6 @@
 include ../standard_rules.mk
 
-OBJS= blink.o testloopback.o
+OBJS= blink.o testloopback.o ftcjtag.o
 BINS:= $(subst .o, ,$(OBJS))
 
 all:  $(OBJS) $(BINS)
